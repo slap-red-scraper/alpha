@@ -77,3 +77,29 @@ if __name__ == "__main__":
 
     elapsed = time.time() - start
     emit_event("job_complete", {"duration": elapsed})
+    
+    # Add to run.py (after the main loop)
+import pandas as pd
+from datetime import datetime
+
+def generate_daily_files():
+    today = datetime.now().strftime("%Y%m%d")
+    df = pd.read_csv('bonuses.csv')
+    
+    # Calculate ROI: (bonusFixed - minWithdraw) / minWithdraw (assumes 1x rollover)
+    df['roi'] = (df['bonusFixed'] - df['minWithdraw']) / df['minWithdraw']
+    
+    # All data
+    df.to_csv(f'{today}_alldata.csv', index=False)
+    
+    # Positive ROI bonuses
+    positive_bonuses = df[df['roi'] > 0].sort_values('roi', ascending=False)
+    positive_bonuses.to_csv(f'{today}_bonuses.csv', index=False)
+    
+    # Top 100 by ROI
+    top100 = positive_bonuses.head(100)
+    top100.to_csv(f'{today}_top100.csv', index=False)
+
+if __name__ == "__main__":
+    # ... existing code ...
+    generate_daily_files()
