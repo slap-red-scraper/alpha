@@ -24,12 +24,15 @@ class Logger:
         "job_complete": "LESS",
         "login_success": "MORE",
         "login_failed": "MORE",
-        "api_request": "MAX",
-        "api_response": "MAX",
+        "api_request": "MORE", # Changed from MAX
+        "api_response": "MORE", # Changed from MAX
         "bonus_fetched": "MORE",
         "downline_fetched": "MORE",
         "csv_written": "MORE",
-        "exception": "LESS"
+        "exception": "LESS",
+        "website_unresponsive": "LESS",
+        "down_sites_summary": "LESS",
+        "bonus_api_error": "MORE"
     }
 
     def __init__(self, log_file: str, log_level: str, console: bool, detail: str):
@@ -60,11 +63,14 @@ class Logger:
 
     def load_metrics(self, log_file: str) -> Dict[str, float]:
         metrics = {
-            "bonuses": 0,
+            "bonuses": 0, # Total count of individual bonus items
             "downlines": 0,
-            "errors": 0,
+            "errors": 0, # General errors + unresponsive + API errors that lead to "ERROR" return
             "runs": 0,
-            "total_runtime": 0.0
+            "total_runtime": 0.0,
+            "total_bonus_amount": 0.0,         # Sum of amounts from all bonus_fetched events
+            "successful_bonus_fetches": 0,     # Number of times bonus_fetched event occurred
+            "failed_bonus_api_calls": 0        # Number of times bonus_api_error event occurred
         }
         if not os.path.exists(log_file): # Check if log_file exists
             return metrics
@@ -73,13 +79,19 @@ class Logger:
                 try:
                     log = json.loads(line)
                     event = log.get("event")
-                    details = log.get("details", {})
+                    details = log.get("details", {}) # Ensure details is always a dict
+
                     if event == "bonus_fetched":
                         metrics["bonuses"] += details.get("count", 0)
+                        metrics["total_bonus_amount"] += details.get("total_amount", 0.0)
+                        metrics["successful_bonus_fetches"] += 1
                     elif event == "downline_fetched":
                         metrics["downlines"] += details.get("count", 0)
-                    elif event == "exception":
+                    elif event == "exception" or event == "website_unresponsive": # Count these as errors for historical load
                         metrics["errors"] += 1
+                    elif event == "bonus_api_error":
+                        metrics["failed_bonus_api_calls"] += 1
+                        metrics["errors"] += 1 # Also count as a general error for overall error tracking
                     elif event == "job_complete":
                         metrics["runs"] += 1
                         metrics["total_runtime"] += details.get("duration", 0.0)

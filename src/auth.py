@@ -47,13 +47,36 @@ var MERCHANTNAME = "(.*?)";', html)
             "walletIsAdmin": ""
         }
 
+        # Log the API request with non-sensitive parts of the payload
+        self.logger.emit("api_request", {
+            "url": api_url,
+            "action": "login", # Specific to this login action
+            "module": payload.get("module"), # Consistent with other api_request logs
+            "mobile": payload.get("mobile") # Non-sensitive identifier
+        })
+
         try:
             response = requests.post(api_url, data=payload)
             response.raise_for_status()
-            data = response.json().get("data", {})
-            if not data.get("token"):
-                self.logger.emit("login_failed", {"url": url})
+            # Assuming the response is JSON. If not, this will raise an error caught by the except block.
+            res_json = response.json() 
+
+            # Log the API response
+            response_details = {"url": api_url, "action": "login", "status": res_json.get("status")}
+            if res_json.get("status") != "SUCCESS":
+                if res_json.get("message"):
+                    response_details["error_message"] = res_json.get("message")
+                if isinstance(res_json.get("data"), dict) and res_json.get("data", {}).get("description"):
+                     response_details["error_description"] = res_json.get("data").get("description")
+                elif isinstance(res_json.get("data"), str):
+                     response_details["error_data_string"] = res_json.get("data")
+            self.logger.emit("api_response", response_details)
+            
+            data = res_json.get("data", {})
+            if not data.get("token"): # Check based on expected success criteria
+                self.logger.emit("login_failed", {"url": url, "reason": res_json.get("message", "No token in response")})
                 return None
+            
             self.logger.emit("login_success", {"url": url})
             return AuthData(
                 merchant_id=merchant_id,
