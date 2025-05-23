@@ -170,8 +170,8 @@ def load_urls(url_file: str) -> List[str]:
 
 def main():
     # Load configuration
-    # Assuming config.in is in the root, adjust path if necessary
-    config_loader = ConfigLoader(path="config.in") 
+    # Assuming config.ini is in the root, adjust path if necessary
+    config_loader = ConfigLoader(path="config.ini") 
     config = config_loader.load()
     
     logger = Logger(
