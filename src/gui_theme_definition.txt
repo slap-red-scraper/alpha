@@ -1,0 +1,30 @@
+Overall Look & Feel: Modern, crisp, aero, minimalist.
+
+Color Palette:
+  Primary Background: Dark gray (#222222)
+  Secondary Background/Accent: Slightly lighter dark gray (#333333)
+  Primary Text Color: Light gray / Off-white (#E0E0E0)
+  Highlight Color: Red (#FF3333 or #E57373 for text)
+  Widget Colors: Variations of dark grays, red for active elements/borders.
+
+Font:
+  Style: Clean, sans-serif. Attempt to use Roboto; fallback to system default sans-serif.
+  Size:
+    Base: 14sp (scalable pixels)
+    Small Label: 12sp
+    Medium Heading: 18sp
+    Large Heading: 24sp
+
+Widget Styling (Conceptual):
+  Buttons: Flat or with subtle gradients. Dark gray background (#333333), light gray text (#E0E0E0). Red border (#FF3333) or background change on hover/press.
+  Text Inputs: Dark gray background (#222222), light gray text (#E0E0E0). Red (#FF3333) border or glow effect on focus.
+  Labels: Light gray text (#E0E0E0).
+  ScrollView/TextArea: Primary dark gray background (#222222), light gray text (#E0E0E0). Scrollbars should be thin, secondary dark gray (#333333) track and thumb, or styled to match the theme as closely as Kivy allows.
+  CheckBox: Box with dark gray background (#333333) and a thin light gray border (#E0E0E0). Checkmark in red (#FF3333).
+  Layouts (e.g., BoxLayout, GridLayout): Utilize padding (e.g., 10dp) and spacing (e.g., 5dp) between elements to ensure a clean, uncluttered visual hierarchy.
+
+Window:
+  Attempt to use a borderless window if Kivy allows for straightforward implementation and custom title bar creation.
+  If custom title bar is too complex, theme the standard window title bar to match the dark theme (dark background, light text).
+  This contributes to the 'aero' (transparent/glass-like effects, though true aero might be hard) and minimalist feel.
+  Minimum window size: e.g., 800x600 pixels.

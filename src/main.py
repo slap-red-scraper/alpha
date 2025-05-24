@@ -218,11 +218,24 @@ def load_urls(url_file: str) -> List[str]:
     with open(url_file, "r") as f:
         return [url.strip() for url in f if url.strip()]
 
-def main():
+def execute_scraping_logic(gui_callback=None): # Renamed and added gui_callback
     # Load configuration
     # Assuming config.ini is in the root, adjust path if necessary
-    config_loader = ConfigLoader(path="config.ini")
-    config = config_loader.load()
+    try:
+        config_loader = ConfigLoader(path="config.ini")
+        config = config_loader.load()
+    except FileNotFoundError as e:
+        if gui_callback:
+            gui_callback(f"ERROR: Configuration file not found: {e}")
+        else:
+            print(f"ERROR: Configuration file not found: {e}")
+        return # Exit if config not found
+    except KeyError as e:
+        if gui_callback:
+            gui_callback(f"ERROR: Configuration error - missing key: {e}")
+        else:
+            print(f"ERROR: Configuration error - missing key: {e}")
+        return # Exit if config error
 
     REQUEST_TIMEOUT = 30  # Define request timeout
     unresponsive_sites_this_run = [] # Initialize list for unresponsive sites
@@ -231,16 +244,25 @@ def main():
         log_file=config.logging.log_file,
         log_level=config.logging.log_level,
         console=config.logging.console,
-        detail=config.logging.detail
+        detail=config.logging.detail,
+        gui_callback=gui_callback # Pass the callback to the logger
     )
     auth_service = AuthService(logger) # AuthService is now imported
     scraper = Scraper(logger, REQUEST_TIMEOUT) # Pass REQUEST_TIMEOUT
 
     # Load URLs and metrics
+    # Use logger for "URL file not found" message as well
+    if not os.path.exists(config.settings.url_file):
+        logger.emit("job_start", {"url_count": 0, "status": f"URL file not found: {config.settings.url_file}"})
+        if gui_callback:
+            gui_callback(f"ERROR: URL file not found: {config.settings.url_file}")
+        # No print here, logger handles console output if configured
+        return
+
     urls = load_urls(config.settings.url_file)
     if not urls: # Exit if no URLs are loaded
         logger.emit("job_start", {"url_count": 0, "status": "No URLs to process"})
-        print("No URLs to process. Exiting.")
+        # No print here, logger handles console output if configured
         return
         
     total_urls = len(urls)
@@ -347,15 +369,18 @@ def main():
         hist_successful_bonus_fetches = history.get("successful_bonus_fetches", 0)
         hist_failed_bonus_api_calls = history.get("failed_bonus_api_calls", 0)
 
-        print(
+        # Format stats string
+        stats_string = (
             f"[ {idx:03}/{total_urls} | {percent:.2f}% ] [ Avg. Run Time: {avg_runtime:.1f}s ] {cleaned_url}\n"
-            f"[ Bonuses: Items Hist {metrics['bonuses_old']} / New {current_run_bonuses} | Total {metrics['bonuses_total_new']} ]\n"
-            f"[ Total Bonus Amt: Hist {history.get('total_bonus_amount', 0.0):.2f} / New {current_run_bonus_amount:.2f} | Total {metrics['bonus_amount_total_new']:.2f} ]\n"
-            f"[ Avg Bonus Amt: Hist {avg_bonus_amount_hist:.2f} / New {avg_bonus_amount_new:.2f} | Total {avg_bonus_amount_total:.2f} ]\n"
-            f"[ Downlines: Hist {metrics['downlines_old']} / New {current_run_downlines} | Total {metrics['downlines_total_new']} ]\n"
-            f"[ Errors: Hist {metrics['errors_old']} / New {current_run_errors} | Total {metrics['errors_total_new']} ]\n"
-            f"[ Bonus API Stats (Hist): Fetches OK {hist_successful_bonus_fetches} / API Fails {hist_failed_bonus_api_calls} ]\n"
+            f"  Bonuses: Items Hist {metrics['bonuses_old']} / New {current_run_bonuses} | Total {metrics['bonuses_total_new']}\n"
+            f"  Total Bonus Amt: Hist {history.get('total_bonus_amount', 0.0):.2f} / New {current_run_bonus_amount:.2f} | Total {metrics['bonus_amount_total_new']:.2f}\n"
+            f"  Avg Bonus Amt: Hist {avg_bonus_amount_hist:.2f} / New {avg_bonus_amount_new:.2f} | Total {avg_bonus_amount_total:.2f}\n"
+            f"  Downlines: Hist {metrics['downlines_old']} / New {current_run_downlines} | Total {metrics['downlines_total_new']}\n"
+            f"  Errors: Hist {metrics['errors_old']} / New {current_run_errors} | Total {metrics['errors_total_new']}\n"
+            f"  Bonus API Stats (Hist): Fetches OK {hist_successful_bonus_fetches} / API Fails {hist_failed_bonus_api_calls}"
         )
+        logger.emit("progress_update", {"message": stats_string}) # Log for file/console
+        # The gui_callback is already part of the logger, so it will receive this if configured.
 
     elapsed = time.time() - start_time
     
@@ -380,5 +405,16 @@ def main():
             "count": len(unresponsive_sites_this_run)
         })
 
+# New main function for CLI execution
+def main():
+    execute_scraping_logic(gui_callback=None)
+
 if __name__ == "__main__":
     main()
+# Renamed main to execute_scraping_logic, added gui_callback, error handling for config.
+# Passed gui_callback to Logger.
+# Converted print stats to logger.emit("progress_update", {"message": stats_string}).
+# Added new main() for CLI.
+# Updated if __name__ == "__main__" block.
+# Ensured ConfigLoader exceptions are handled and communicated via callback if present.
+# Ensured URL file not found is handled and communicated.
