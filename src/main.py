@@ -1,6 +1,8 @@
 import csv
 import os
 import requests
+import pandas as pd # Added pandas import
+from datetime import datetime, timedelta # Added import
 from typing import List, Set, Tuple, Union # Union for return types
 from .models import Downline, Bonus, AuthData
 from .logger import Logger
@@ -156,6 +158,8 @@ class Scraper:
             return 0, 0.0 # Return count 0 and amount 0.0 for consistency
         
         rows_to_write_obj: List[Bonus] = [] # Store Bonus objects
+        # Ensure the directory for the CSV file exists
+        os.makedirs(os.path.dirname(csv_file), exist_ok=True)
         # Determine if header needs to be written
         file_exists_and_not_empty = os.path.exists(csv_file) and os.path.getsize(csv_file) > 0
         with open(csv_file, "a", newline="", encoding="utf-8") as f:
@@ -291,7 +295,9 @@ def main():
             if config.settings.downline_enabled:
                 result = scraper.fetch_downlines(cleaned_url, auth_data)
             else:
-                result = scraper.fetch_bonuses(cleaned_url, auth_data)
+                # Generate dynamic CSV filename for bonuses
+                bonus_csv_path = datetime.now().strftime("data/%m-%d bonuses.csv")
+                result = scraper.fetch_bonuses(cleaned_url, auth_data, csv_file=bonus_csv_path)
 
             if isinstance(result, str): # "UNRESPONSIVE" or "ERROR"
                 metrics["errors_new"] += 1
@@ -372,6 +378,210 @@ def main():
         "errors_this_run": metrics["errors_new"],
         "unresponsive_sites_count_this_run": len(unresponsive_sites_this_run)
     }
+    # --- Historical Bonus Data to Excel ---
+    today_date_str = datetime.now().strftime('%m-%d')
+    daily_bonus_csv_path = f"data/{today_date_str} bonuses.csv"
+    historical_excel_path = "data/historical_bonuses.xlsx"
+
+    if not config.settings.downline_enabled: # Only run if bonuses were being collected
+        if os.path.exists(daily_bonus_csv_path) and os.path.getsize(daily_bonus_csv_path) > 0:
+            try:
+                bonus_df = pd.read_csv(daily_bonus_csv_path)
+                if not bonus_df.empty:
+                    # Ensure the 'data' directory exists for the Excel file
+                    os.makedirs(os.path.dirname(historical_excel_path), exist_ok=True)
+                    
+                    mode = 'a' if os.path.exists(historical_excel_path) else 'w'
+                    with pd.ExcelWriter(historical_excel_path, engine='openpyxl', mode=mode, if_sheet_exists='replace') as writer:
+                        bonus_df.to_excel(writer, sheet_name=today_date_str, index=False)
+                    logger.emit("historical_data_written", {"file": historical_excel_path, "sheet": today_date_str, "rows": len(bonus_df)})
+                else:
+                    logger.emit("historical_data_skipped", {"reason": "Daily bonus CSV is empty", "file": daily_bonus_csv_path})
+            except Exception as e:
+                logger.emit("historical_data_error", {"file": daily_bonus_csv_path, "excel_file": historical_excel_path, "error": str(e)})
+        else:
+            logger.emit("historical_data_skipped", {"reason": "Daily bonus CSV not found or empty", "file": daily_bonus_csv_path})
+    # --- End Historical Bonus Data ---
+
+    # --- Bonus Comparison Logic ---
+    try:
+        # from datetime import timedelta # Ensure timedelta is available (already imported at top)
+
+        today_dt = datetime.now()
+        yesterday_dt = today_dt - timedelta(days=1)
+        today_sheet_name = today_dt.strftime('%m-%d')
+        yesterday_sheet_name = yesterday_dt.strftime('%m-%d')
+        
+        comparison_report_path = f"data/comparison_report_{today_sheet_name}.csv"
+        # historical_excel_path is defined in the block above
+
+        today_df = None
+        # Try to use bonus_df if it exists from the historical data update step
+        if 'bonus_df' in locals() and isinstance(bonus_df, pd.DataFrame) and not bonus_df.empty:
+            # A bit of a heuristic: if daily_bonus_csv_path (from historical step) matches today's pattern
+            if 'daily_bonus_csv_path' in locals() and daily_bonus_csv_path == f"data/{today_sheet_name} bonuses.csv":
+                 today_df = bonus_df
+        
+        if today_df is None: # If not available or not today's data, load it
+            current_day_bonus_csv = f"data/{today_sheet_name} bonuses.csv"
+            if os.path.exists(current_day_bonus_csv) and os.path.getsize(current_day_bonus_csv) > 0:
+                today_df = pd.read_csv(current_day_bonus_csv)
+            else:
+                today_df = pd.DataFrame() 
+
+        yesterday_df = pd.DataFrame()
+        if os.path.exists(historical_excel_path): # historical_excel_path defined in previous block
+            try:
+                yesterday_df = pd.read_excel(historical_excel_path, sheet_name=yesterday_sheet_name)
+            except FileNotFoundError: # Should not happen if os.path.exists passed, but good for robustness
+                logger.emit("comparison_info", {"message": f"Historical Excel file not found at {historical_excel_path} for comparison. Yesterday's data assumed empty."})
+            except ValueError: # Sheet not found
+                logger.emit("comparison_info", {"message": f"Sheet {yesterday_sheet_name} for yesterday not found in {historical_excel_path}. Yesterday's data assumed empty."})
+            except Exception as e:
+                logger.emit("comparison_error", {"message": f"Error reading yesterday's sheet {yesterday_sheet_name} from {historical_excel_path}: {str(e)}"})
+        else:
+            logger.emit("comparison_info", {"message": f"Historical Excel file {historical_excel_path} does not exist. Yesterday's data assumed empty."})
+
+        expected_columns = [
+            'url', 'merchant_name', 'id', 'name', 'transaction_type', 'bonus_fixed', 'amount',
+            'min_withdraw', 'max_withdraw', 'withdraw_to_bonus_ratio', 'rollover', 'balance',
+            'claim_config', 'claim_condition', 'bonus', 'bonus_random', 'reset',
+            'min_topup', 'max_topup', 'refer_link'
+        ]
+
+        # Initialize DataFrames with expected columns if they are empty
+        if today_df.empty:
+            today_df = pd.DataFrame(columns=expected_columns)
+        else:
+            for col in expected_columns:
+                if col not in today_df.columns: today_df[col] = pd.NA
+        
+        if yesterday_df.empty:
+            yesterday_df = pd.DataFrame(columns=expected_columns)
+        else:
+            for col in expected_columns:
+                if col not in yesterday_df.columns: yesterday_df[col] = pd.NA
+            
+        key_cols = ['merchant_name', 'name', 'amount']
+        for df_ref in [today_df, yesterday_df]:
+            if not df_ref.empty:
+                for col in key_cols:
+                    if col == 'amount':
+                        df_ref[col] = pd.to_numeric(df_ref[col], errors='coerce').round(5)
+                    else:
+                        df_ref[col] = df_ref[col].astype(str).fillna('') # fillna for string keys
+                # Drop rows if any part of the composite key is NaN after coercion, as they can't be reliably compared
+                df_ref.dropna(subset=[k for k in key_cols if k in df_ref.columns], how='any', inplace=True)
+
+
+        if not today_df.empty:
+            today_df['_comparison_key'] = today_df['merchant_name'].astype(str) + "_" + today_df['name'].astype(str) + "_" + today_df['amount'].astype(str)
+        else: # Add empty key series if df is empty, for consistent merge
+            today_df['_comparison_key'] = pd.Series(dtype='object')
+
+
+        if not yesterday_df.empty:
+            yesterday_df['_comparison_key'] = yesterday_df['merchant_name'].astype(str) + "_" + yesterday_df['name'].astype(str) + "_" + yesterday_df['amount'].astype(str)
+        else:
+            yesterday_df['_comparison_key'] = pd.Series(dtype='object')
+
+        report_data_list = []
+
+        if today_df.empty and yesterday_df.empty:
+            logger.emit("comparison_info", {"message": "Both today's and yesterday's bonus data are empty. No comparison report generated."})
+        else:
+            # Ensure _comparison_key exists even if DFs were originally empty
+            if '_comparison_key' not in today_df.columns: today_df['_comparison_key'] = pd.Series(dtype='object')
+            if '_comparison_key' not in yesterday_df.columns: yesterday_df['_comparison_key'] = pd.Series(dtype='object')
+
+            merged_df = pd.merge(
+                today_df,
+                yesterday_df,
+                on='_comparison_key',
+                how='outer',
+                suffixes=('_today', '_yesterday'),
+                indicator=True
+            )
+            
+            report_columns = ['status', 'change_details'] + expected_columns
+            
+            for idx, row in merged_df.iterrows():
+                item_details = {}
+                status = ""
+                change_details_str = ""
+
+                is_new = row['_merge'] == 'left_only'
+                is_used = row['_merge'] == 'right_only'
+                is_persistent = row['_merge'] == 'both'
+
+                current_suffix = '_today' if not is_used else '' # Should not happen for used
+                prior_suffix = '_yesterday' if not is_new else '' # Should not happen for new
+
+                if is_new:
+                    status = "New"
+                    for col in expected_columns: item_details[col] = row[col + current_suffix]
+                elif is_used:
+                    status = "Used"
+                    for col in expected_columns: item_details[col] = row[col + prior_suffix]
+                elif is_persistent:
+                    status = "Persistent_Unchanged"
+                    changes_detected_list = []
+                    for col in expected_columns:
+                        item_details[col] = row[col + '_today'] # Current value
+                        val_today = row[col + '_today']
+                        val_yesterday = row[col + '_yesterday']
+
+                        # Robust NaN and type checking for comparison
+                        if pd.isna(val_today) and pd.isna(val_yesterday): continue
+                        if pd.isna(val_today) or pd.isna(val_yesterday): # One is NaN, other is not
+                            changes_detected_list.append(f"{col}: '{val_yesterday}' -> '{val_today}'")
+                            continue
+                        
+                        # Attempt type-aware comparison for floats
+                        try:
+                            num_today = pd.to_numeric(val_today)
+                            num_yesterday = pd.to_numeric(val_yesterday)
+                            if not pd.isna(num_today) and not pd.isna(num_yesterday):
+                                if round(num_today, 5) != round(num_yesterday, 5):
+                                    changes_detected_list.append(f"{col}: {val_yesterday} -> {val_today}")
+                                continue # Compared as numbers
+                        except (ValueError, TypeError):
+                            pass # Not both numbers, compare as strings below
+                            
+                        if str(val_today) != str(val_yesterday):
+                            changes_detected_list.append(f"{col}: '{val_yesterday}' -> '{val_today}'")
+                            
+                    if changes_detected_list:
+                        status = "Persistent_Changed"
+                        change_details_str = "; ".join(changes_detected_list)
+                
+                item_details['status'] = status
+                item_details['change_details'] = change_details_str
+                
+                # Ensure all report columns are present before appending
+                final_item_for_report = {key: item_details.get(key) for key in report_columns}
+                report_data_list.append(final_item_for_report)
+
+            if report_data_list:
+                report_df = pd.DataFrame(report_data_list, columns=report_columns)
+                os.makedirs(os.path.dirname(comparison_report_path), exist_ok=True)
+                report_df.to_csv(comparison_report_path, index=False, encoding='utf-8')
+                logger.emit("comparison_report_generated", {
+                    "path": comparison_report_path,
+                    "new_count": len(report_df[report_df['status'] == 'New']),
+                    "used_count": len(report_df[report_df['status'] == 'Used']),
+                    "persistent_changed_count": len(report_df[report_df['status'] == 'Persistent_Changed']),
+                    "persistent_unchanged_count": len(report_df[report_df['status'] == 'Persistent_Unchanged']),
+                })
+            else:
+                logger.emit("comparison_info", {"message": "No bonus changes detected or data to compare. Comparison report not generated."})
+                
+    except Exception as e:
+        # Log the full traceback for detailed debugging if possible, or at least the error type and message
+        import traceback
+        logger.emit("comparison_module_error", {"error_type": type(e).__name__, "error": str(e), "traceback": traceback.format_exc()})
+    # --- End Bonus Comparison Logic ---
+
     logger.emit("job_complete", job_summary_details)
 
     if unresponsive_sites_this_run:

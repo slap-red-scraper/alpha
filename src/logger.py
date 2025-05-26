@@ -41,6 +41,7 @@ class Logger:
         self.verbosity = self.VERBOSITY_LEVELS.get(detail.upper(), 0) # ensure detail is upper
 
         # File handler
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(JsonFormatter())
         self.logger.addHandler(file_handler)
