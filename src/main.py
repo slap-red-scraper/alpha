@@ -1,5 +1,7 @@
 import csv
 import os
+import sys # Added sys import
+import time # Added time import
 import requests
 import pandas as pd # Added pandas import
 from datetime import datetime, timedelta # Added import
@@ -7,6 +9,7 @@ from typing import List, Set, Tuple, Union # Union for return types
 from .models import Downline, Bonus, AuthData
 from .logger import Logger
 from .auth import AuthService # Added import for AuthService
+from .utils import progress, load_run_cache, save_run_cache # Added cache imports
 
 class Scraper:
     """Handles scraping of downlines and bonuses."""
@@ -109,7 +112,15 @@ class Scraper:
         self.logger.emit("downline_fetched", {"count": total_new_rows}) # This will only be reached on success
         return total_new_rows
 
-    def fetch_bonuses(self, url: str, auth: AuthData, csv_file: str = "bonuses.csv") -> Union[Tuple[int, float], str]:
+    def fetch_bonuses(self, url: str, auth: AuthData, csv_file: str = "bonuses.csv") -> Union[Tuple[int, float, dict[str, bool]], str]:
+        # Define keyword lists (case-insensitive search)
+        C_KEYWORDS = ["commission", "affiliate"]
+        D_KEYWORDS = ["downline first deposit"]
+        S_KEYWORDS = ["share bonus", "referrer"]
+        
+        # Initialize bonus_type_flags
+        bonus_type_flags = {"C": False, "D": False, "S": False, "O": False}
+
         payload = {
             "module": "/users/syncData",
             "merchantId": auth.merchant_id,
@@ -155,7 +166,7 @@ class Scraper:
         if not bonuses_data_raw:
             # Log that no bonuses were found, but with 0 amount. This is a successful API call.
             self.logger.emit("bonus_fetched", {"count": 0, "total_amount": 0.0})
-            return 0, 0.0 # Return count 0 and amount 0.0 for consistency
+            return 0, 0.0, bonus_type_flags # Return count 0, amount 0.0, and flags
         
         rows_to_write_obj: List[Bonus] = [] # Store Bonus objects
         # Ensure the directory for the CSV file exists
@@ -201,14 +212,32 @@ class Scraper:
                     refer_link=str(b_data.get("referLink", ""))
                 )
                 rows_to_write_obj.append(bonus_instance)
-            
+
+                # Keyword matching for bonus types
+                name_lower = bonus_instance.name.lower() if bonus_instance.name else ""
+                claim_config_lower = bonus_instance.claim_config.lower() if bonus_instance.claim_config else ""
+                matched_c_d_s_for_this_bonus = False
+
+                if any(keyword in name_lower or keyword in claim_config_lower for keyword in C_KEYWORDS):
+                    bonus_type_flags["C"] = True
+                    matched_c_d_s_for_this_bonus = True
+                if any(keyword in name_lower or keyword in claim_config_lower for keyword in D_KEYWORDS):
+                    bonus_type_flags["D"] = True
+                    matched_c_d_s_for_this_bonus = True
+                if any(keyword in name_lower or keyword in claim_config_lower for keyword in S_KEYWORDS):
+                    bonus_type_flags["S"] = True
+                    matched_c_d_s_for_this_bonus = True
+                
+                if not matched_c_d_s_for_this_bonus: # If a bonus instance exists and didn't match C, D, or S
+                    bonus_type_flags["O"] = True
+
             if rows_to_write_obj:
                 writer.writerows([b.__dict__ for b in rows_to_write_obj])
                 self.logger.emit("csv_written", {"file": csv_file, "count": len(rows_to_write_obj)})
 
         current_fetch_total_amount = sum(b.amount for b in rows_to_write_obj)
         self.logger.emit("bonus_fetched", {"count": len(rows_to_write_obj), "total_amount": current_fetch_total_amount})
-        return len(rows_to_write_obj), current_fetch_total_amount
+        return len(rows_to_write_obj), current_fetch_total_amount, bonus_type_flags
 
 import time
 from .config import ConfigLoader
@@ -228,6 +257,11 @@ def main():
     config_loader = ConfigLoader(path="config.ini")
     config = config_loader.load()
 
+    # Load run cache at the beginning
+    run_cache_data = load_run_cache()
+    run_cache_data["total_script_runs"] += 1
+    # The run_cache_data["sites"] will be updated later as per subsequent tasks.
+
     REQUEST_TIMEOUT = 30  # Define request timeout
     unresponsive_sites_this_run = [] # Initialize list for unresponsive sites
 
@@ -242,6 +276,14 @@ def main():
 
     # Load URLs and metrics
     urls = load_urls(config.settings.url_file)
+
+    # Helper function for formatting stat parts for display
+    def format_stat_display(current_val, prev_val):
+        if current_val == 0 and prev_val == 0:
+            return "" # Omit if 0/0
+        diff = current_val - prev_val
+        return f"{current_val}/{prev_val}({diff:+})"
+
     if not urls: # Exit if no URLs are loaded
         logger.emit("job_start", {"url_count": 0, "status": "No URLs to process"})
         print("No URLs to process. Exiting.")
@@ -272,62 +314,148 @@ def main():
     metrics["errors_total_new"] = metrics["errors_total_old"]
     metrics["bonus_amount_total_new"] = metrics["bonus_amount_total_old"]
 
+    try:
+        logger.emit("job_start", {"url_count": total_urls, "total_script_runs": run_cache_data.get("total_script_runs", "N/A")})
+        start_time = time.time() # Corrected variable name
 
-    logger.emit("job_start", {"url_count": total_urls})
-    start_time = time.time() # Corrected variable name
+        for idx, url in enumerate(urls, 1):
+            if idx > 1: # If not the first iteration
+                sys.stdout.write('\x1b[3A') # Move cursor up 3 lines
+                sys.stdout.write('\x1b[J')  # Clear from cursor to end of screen
 
-    for idx, url in enumerate(urls, 1):
-        cleaned_url = auth_service.clean_url(url)
-        try:
-            auth_data = auth_service.login(
-                cleaned_url,
+            site_start_time = time.time() # Start timing for the site
+            cleaned_url = auth_service.clean_url(url)
+            site_key = cleaned_url # Use cleaned_url as the consistent key
+
+            # a. Initialize site-specific new item counts for the current run
+            cr_bonuses_site = 0
+            cr_downlines_site = 0
+            cr_errors_site = 0
+            # current_site_bonus_flags is initialized later, just before bonus fetching
+
+            # b. Retrieve cached "previous run" data for the cleaned_url
+            site_cache_entry = run_cache_data["sites"].get(site_key, {})
+            pr_bonuses = site_cache_entry.get("last_run_new_bonuses", 0)
+            prt_bonuses = site_cache_entry.get("cumulative_total_bonuses", 0)
+            pr_downlines = site_cache_entry.get("last_run_new_downlines", 0)
+            prt_downlines = site_cache_entry.get("cumulative_total_downlines", 0)
+            pr_errors = site_cache_entry.get("last_run_new_errors", 0)
+            prt_errors = site_cache_entry.get("cumulative_total_errors", 0)
+
+            try:
+                auth_data = auth_service.login(
+                    cleaned_url,
                 config.credentials.mobile,
                 config.credentials.password
             )
-            if not auth_data:
-                metrics["errors_new"] += 1
-                metrics["errors_total_new"] += 1
-                # Log this specific type of error if needed, e.g., auth_service.login might return None on failure
-                logger.emit("exception", {"error": f"Authentication failed for {cleaned_url}"})
-                continue
+                if not auth_data:
+                    metrics["errors_new"] += 1 # Global metric
+                    metrics["errors_total_new"] += 1 # Global metric
+                    cr_errors_site = 1 # Site-specific error
+                    logger.emit("exception", {"error": f"Authentication failed for {cleaned_url}"})
+                    # Skip to the next URL via 'continue' is implicitly handled by structure if auth_data is None
+                
+                current_site_bonus_flags = {"C": False, "D": False, "S": False, "O": False} # Initialize for this site
+                
+                if auth_data: # Only proceed if authentication was successful
+                    if config.settings.downline_enabled:
+                        result_dl = scraper.fetch_downlines(cleaned_url, auth_data)
+                        if isinstance(result_dl, str): # "UNRESPONSIVE" or "ERROR"
+                            metrics["errors_new"] += 1
+                            metrics["errors_total_new"] += 1
+                            cr_errors_site = 1
+                            if result_dl == "UNRESPONSIVE":
+                                unresponsive_sites_this_run.append(cleaned_url)
+                        else: # Success, result_dl is int
+                            cr_downlines_site = result_dl
+                            metrics["downlines_new"] += result_dl
+                            metrics["downlines_total_new"] += result_dl
+                    else: # Bonus fetching mode
+                        bonus_csv_path = datetime.now().strftime("data/%m-%d bonuses.csv")
+                        result_bonuses = scraper.fetch_bonuses(cleaned_url, auth_data, csv_file=bonus_csv_path)
+                        if isinstance(result_bonuses, str): # "UNRESPONSIVE" or "ERROR"
+                            metrics["errors_new"] += 1
+                            metrics["errors_total_new"] += 1
+                            cr_errors_site = 1
+                            if result_bonuses == "UNRESPONSIVE":
+                                unresponsive_sites_this_run.append(cleaned_url)
+                        else: # Success
+                            count, current_fetch_total_amount, current_site_bonus_flags = result_bonuses
+                            cr_bonuses_site = count
+                            metrics["bonuses_new"] += count
+                            metrics["bonus_amount_new"] += current_fetch_total_amount
+                            metrics["bonuses_total_new"] += count 
+                            metrics["bonus_amount_total_new"] += current_fetch_total_amount
             
-            result: Union[int, str] # Define type for result
-            if config.settings.downline_enabled:
-                result = scraper.fetch_downlines(cleaned_url, auth_data)
-            else:
-                # Generate dynamic CSV filename for bonuses
-                bonus_csv_path = datetime.now().strftime("data/%m-%d bonuses.csv")
-                result = scraper.fetch_bonuses(cleaned_url, auth_data, csv_file=bonus_csv_path)
-
-            if isinstance(result, str): # "UNRESPONSIVE" or "ERROR"
+            except Exception as e: # Catch-all for unexpected errors in the main loop for this site
                 metrics["errors_new"] += 1
                 metrics["errors_total_new"] += 1
-                if result == "UNRESPONSIVE":
-                    unresponsive_sites_this_run.append(cleaned_url)
-                # No further action for "ERROR" as it's already logged by scraper method
-            else: # Success, result is a tuple (count, amount) for bonuses, or int for downlines
-                if config.settings.downline_enabled:
-                    # result is int for downlines
-                    metrics["downlines_new"] += result
-                    metrics["downlines_total_new"] += result
-                else:
-                    # result is Tuple[int, float] for bonuses
-                    count, current_fetch_total_amount = result
-                    metrics["bonuses_new"] += count
-                    metrics["bonus_amount_new"] += current_fetch_total_amount
-                    # bonuses_total_new is already initialized with historical, so just add new
-                    metrics["bonuses_total_new"] += count 
-                    metrics["bonus_amount_total_new"] += current_fetch_total_amount
-        
-        except Exception as e: # Catch-all for unexpected errors in the main loop
-            metrics["errors_new"] += 1
-            metrics["errors_total_new"] += 1
-            logger.emit("exception", {"error": f"Outer loop exception for {cleaned_url}: {str(e)}"})
+                cr_errors_site = 1
+                logger.emit("exception", {"error": f"Outer loop exception for {cleaned_url}: {str(e)}"})
 
-        # Progress reporting
-        percent = (idx / total_urls) * 100
-        # Ensure history["runs"] is not zero to avoid DivisionByZeroError
-        avg_runtime = (history.get("total_runtime", 0) / history.get("runs")) if history.get("runs") else 0
+            # d. Calculate current run's cumulative totals for the site
+            crt_bonuses = prt_bonuses + cr_bonuses_site
+            crt_downlines = prt_downlines + cr_downlines_site
+            crt_errors = prt_errors + cr_errors_site
+
+            # e. Store these newly calculated values into run_cache_data
+            run_cache_data["sites"].setdefault(site_key, {})
+            run_cache_data["sites"][site_key]["last_run_new_bonuses"] = cr_bonuses_site
+            run_cache_data["sites"][site_key]["cumulative_total_bonuses"] = crt_bonuses
+            run_cache_data["sites"][site_key]["last_run_new_downlines"] = cr_downlines_site
+            run_cache_data["sites"][site_key]["cumulative_total_downlines"] = crt_downlines
+            run_cache_data["sites"][site_key]["last_run_new_errors"] = cr_errors_site
+            run_cache_data["sites"][site_key]["cumulative_total_errors"] = crt_errors
+            run_cache_data["sites"][site_key]["bonus_flags"] = current_site_bonus_flags # Store bonus flags
+
+            # f. Package stats for display (used for new print logic)
+            display_stats_for_site = {
+                "cr_bonuses_site": cr_bonuses_site, "pr_bonuses": pr_bonuses, "crt_bonuses": crt_bonuses, "prt_bonuses": prt_bonuses,
+                "cr_downlines_site": cr_downlines_site, "pr_downlines": pr_downlines, "crt_downlines": crt_downlines, "prt_downlines": prt_downlines,
+                "cr_errors_site": cr_errors_site, "pr_errors": pr_errors, "crt_errors": crt_errors, "prt_errors": prt_errors,
+                "bonus_flags": current_site_bonus_flags
+            }
+            
+            site_processing_duration = time.time() - site_start_time
+
+            # Prepare display data for new 3-line print
+            percent = (idx / total_urls) * 100
+            run_count = run_cache_data["total_script_runs"]
+            sfs = display_stats_for_site # Shorthand
+
+            bonus_flags = sfs.get('bonus_flags', {})
+            flags_str = f"[C] {'Y' if bonus_flags.get('C') else 'N'} " + \
+                        f"[D] {'Y' if bonus_flags.get('D') else 'N'} " + \
+                        f"[S] {'Y' if bonus_flags.get('S') else 'N'} " + \
+                        f"[O] {'Y' if bonus_flags.get('O') else 'N'}"
+            
+            progress_bar_str = progress(idx, vmin=0, vmax=total_urls, length=40, title="") # Reduced length for compactness
+            
+            line1 = f"| {progress_bar_str} | [{percent:.2f}%] {idx}/{total_urls} |"
+            line2 = f"| {site_processing_duration:.1f}s | [Run #{run_count}] | {flags_str} | [URL] {cleaned_url} |"
+
+            r_b = format_stat_display(sfs['cr_bonuses_site'], sfs['pr_bonuses'])
+            t_b = format_stat_display(sfs['crt_bonuses'], sfs['prt_bonuses'])
+            stats_b_str = f"[B]|[R]:{r_b if r_b else '-'} [T]:{t_b if t_b else '-'}"
+
+            stats_d_str = ""
+            if config.settings.downline_enabled:
+                r_d = format_stat_display(sfs['cr_downlines_site'], sfs['pr_downlines'])
+                t_d = format_stat_display(sfs['crt_downlines'], sfs['prt_downlines'])
+                stats_d_str = f"| [D]|[R]:{r_d if r_d else '-'} [T]:{t_d if t_d else '-'}"
+
+            r_e = format_stat_display(sfs['cr_errors_site'], sfs['pr_errors'])
+            t_e = format_stat_display(sfs['crt_errors'], sfs['prt_errors'])
+            stats_e_str = f"| [E]|[R]:{r_e if r_e else '-'} [T]:{t_e if t_e else '-'}"
+            
+            line3 = f"| {stats_b_str} {stats_d_str} {stats_e_str} |"
+
+            sys.stdout.write(f"{line1}\n")
+            sys.stdout.write(f"{line2}\n")
+            sys.stdout.write(f"{line3}\n")
+            sys.stdout.flush()
+
+            # The old print statement below this block will be removed by the next SEARCH/REPLACE
         
         # Calculate increments for current run
         bonuses_increment = metrics["bonuses_new"]
@@ -353,17 +481,33 @@ def main():
         hist_successful_bonus_fetches = history.get("successful_bonus_fetches", 0)
         hist_failed_bonus_api_calls = history.get("failed_bonus_api_calls", 0)
 
+        # Prepare bonus flags string for display
+        # current_site_bonus_flags is available here from the loop
+        bonus_flags_str = ""
+        if not config.settings.downline_enabled: # Only show if fetching bonuses
+            flags_display = []
+            if current_site_bonus_flags.get("C"): flags_display.append("C")
+            if current_site_bonus_flags.get("D"): flags_display.append("D")
+            if current_site_bonus_flags.get("S"): flags_display.append("S")
+            if current_site_bonus_flags.get("O"): flags_display.append("O")
+            if not flags_display and metrics["bonuses_new"] > 0 : # If bonuses were fetched but no C,D,S,O flags set (should be rare if O logic is correct)
+                 # This case implies bonuses were fetched but none were categorized.
+                 # This might happen if fetch_bonuses returns success (count > 0) but all bonus items were skipped before O flag could be set.
+                 # Or if fetch_bonuses returned (0,0,flags) where flags are all False.
+                 pass # No specific flags to show, or O logic will handle it.
+            bonus_flags_str = f"[ Flags: {' '.join(flags_display) if flags_display else 'N/A'} ]"
+
+
         print(
-            f"[ {idx:03}/{total_urls} | {percent:.2f}% ] [ Avg. Run Time: {avg_runtime:.1f}s ] {cleaned_url}\n"
+            f"[ {idx:03}/{total_urls} | {percent:.2f}% ] [ Avg. Run Time: {avg_runtime:.1f}s ] {cleaned_url} {bonus_flags_str}\n" # Added bonus_flags_str
             f"[ Bonuses: Items Hist {metrics['bonuses_old']} / New {current_run_bonuses} | Total {metrics['bonuses_total_new']} ]\n"
             f"[ Total Bonus Amt: Hist {history.get('total_bonus_amount', 0.0):.2f} / New {current_run_bonus_amount:.2f} | Total {metrics['bonus_amount_total_new']:.2f} ]\n"
             f"[ Avg Bonus Amt: Hist {avg_bonus_amount_hist:.2f} / New {avg_bonus_amount_new:.2f} | Total {avg_bonus_amount_total:.2f} ]\n"
-            f"[ Downlines: Hist {metrics['downlines_old']} / New {current_run_downlines} | Total {metrics['downlines_total_new']} ]\n"
-            f"[ Errors: Hist {metrics['errors_old']} / New {current_run_errors} | Total {metrics['errors_total_new']} ]\n"
-            f"[ Bonus API Stats (Hist): Fetches OK {hist_successful_bonus_fetches} / API Fails {hist_failed_bonus_api_calls} ]\n"
+            # This old print block is removed.
         )
 
     elapsed = time.time() - start_time
+    sys.stdout.write("\n") # Ensure prompt is on a new line after loop
     
     # Calculate average bonus amount for the current run
     avg_bonus_amount_this_run = (metrics["bonus_amount_new"] / metrics["bonuses_new"]) if metrics["bonuses_new"] > 0 else 0.0
@@ -589,6 +733,10 @@ def main():
             "sites": unresponsive_sites_this_run,
             "count": len(unresponsive_sites_this_run)
         })
+    finally:
+        # Save the cache at the very end, regardless of errors during main processing
+        save_run_cache(run_cache_data)
+        logger.emit("cache_saved", {"path": "data/run_metrics_cache.json", "total_script_runs": run_cache_data.get("total_script_runs")})
 
 if __name__ == "__main__":
     main()
