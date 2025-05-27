@@ -17,8 +17,7 @@ class AuthService:
 
     @staticmethod
     def extract_merchant_info(html: str) -> tuple[Optional[str], Optional[str]]:
-        match = re.search(r'var MERCHANTID = (\d+);
-var MERCHANTNAME = "(.*?)";', html)
+        match = re.search(r'var MERCHANTID = (\d+);\s*var MERCHANTNAME = "(.*?)";', html)
         return match.groups() if match else (None, None)
 
     def login(self, url: str, mobile: str, password: str) -> Optional[AuthData]:
