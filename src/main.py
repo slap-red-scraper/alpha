@@ -10,7 +10,6 @@ from .models import Downline, Bonus, AuthData
 from .logger import Logger
 from .auth import AuthService # Added import for AuthService
 from .utils import progress, load_run_cache, save_run_cache # Added cache imports
-from .config import ConfigLoader # Added ConfigLoader import
 
 class Scraper:
     """Handles scraping of downlines and bonuses."""

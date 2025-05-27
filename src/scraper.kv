@@ -1,0 +1,175 @@
+#:kivy 2.0.0
+
+# Define Colors and Fonts
+<colors@Widget>: # Use a dummy class or existing class for constants if preferred
+    primary_bg: (0.133, 0.133, 0.133, 1) # Dark gray #222222
+    secondary_bg: (0.2, 0.2, 0.2, 1)    # Slightly lighter dark gray #333333
+    primary_text: (0.878, 0.878, 0.878, 1) # Light gray / Off-white #E0E0E0
+    highlight: (1, 0.2, 0.2, 1)          # Red #FF3333
+    highlight_text: (0.898, 0.451, 0.451, 1) # Red for text #E57373
+    disabled_button_bg: (0.25, 0.25, 0.25, 1)
+    disabled_button_text: (0.5, 0.5, 0.5, 1)
+
+# Global font settings
+<Widget>:
+    font_name: 'Roboto'
+    font_size: '14sp'
+
+# Base Screen styling
+<Screen>:
+    background_color: colors.primary_bg
+
+<Label>:
+    color: colors.primary_text
+    markup: True
+    # Default padding for labels in config screen for better alignment
+    # padding_x: '5dp' # This might be too global, prefer to set on specific labels if needed
+
+<ConfigScreenLabel@Label>: # Specific labels in ConfigScreen if needed
+    size_hint_x: 0.4
+    halign: 'left'
+    valign: 'center'
+    text_size: self.width, None # For wrapping
+
+<Button>:
+    color: colors.primary_text
+    background_color: colors.secondary_bg
+    background_normal: ''
+    background_down: colors.highlight # Use highlight color for press
+    border: (2, 2, 2, 2)
+    size_hint_y: None
+    height: '44dp' # Default button height
+    disabled_background_color: colors.disabled_button_bg
+    disabled_color: colors.disabled_button_text
+    on_disabled:
+        # Explicitly set background and color when disabled, as Kivy's default might not use disabled_background_color always
+        if self.disabled: \
+        self.background_color = colors.disabled_button_bg; \
+        self.color = colors.disabled_button_text
+        else: \
+        self.background_color = colors.secondary_bg; \
+        self.color = colors.primary_text
+
+
+<NavButton@Button>:
+    is_active: False
+    background_color: colors.highlight if self.is_active else colors.secondary_bg
+    on_is_active:
+        # Ensure color updates if is_active changes AFTER initial on_disabled might have run
+        if self.disabled: return # Don't override disabled style
+        self.background_color = colors.highlight if self.is_active else colors.secondary_bg
+
+
+<TextInput>:
+    background_color: colors.primary_bg  # Darker background for input area
+    foreground_color: colors.primary_text
+    cursor_color: colors.highlight_text
+    selection_color: colors.highlight_text
+    padding: [10, 10, 10, 10]
+    # Use a slightly lighter border or different background for the text input itself
+    # canvas.before:
+    #     Color:
+    #         rgba: colors.secondary_bg # Border color
+    #     BorderImage:
+    #         border: (2,2,2,2) # Thicker border for inputs
+    #         source: 'atlas://data/images/defaulttheme/textinput' # Kivy's default, but with our border color
+    #     Color:
+    #         rgba: colors.primary_bg # Background for text area
+    #     Rectangle:
+    #         pos: self.pos[0]+1, self.pos[1]+1
+    #         size: self.size[0]-2, self.size[1]-2
+
+
+<CheckBox>:
+    color: colors.highlight # Color of the check mark itself
+    # For the box, it's tricky. Kivy's default is simple.
+    # We can try to use canvas instructions for a custom look if needed,
+    # but it adds complexity. For now, just the checkmark color.
+
+<ScrollView>:
+    bar_color: colors.highlight
+    bar_inactive_color: colors.secondary_bg
+    bar_width: '6dp' # Slightly thinner
+    scroll_type: ['bars', 'content']
+
+<BoxLayout>: # Default for general BoxLayouts
+    padding: '10dp'
+    spacing: '5dp'
+
+<GridLayout>: # Default for general GridLayouts
+    padding: '10dp'
+    spacing: '5dp'
+
+# ConfigScreen specific styles
+# ConfigScreen's GridLayout is created in Python. We can style its children.
+# Labels within ConfigScreen's GridLayout will get <Label> style.
+# TextInputs will get <TextInput> style.
+# The status label and save button in ConfigScreen are named `self.config_status_label` and `self.save_button`
+# They will get global styles. If specific styling is needed, assign them a class.
+# Example for the status label in ConfigScreen:
+# <ConfigStatusLabel@Label>:
+#     id: config_status_label # This id is for Python access if created in KV
+#     # Custom styles here
+
+# ProgressScreen - Structure defined here
+<ProgressScreen>:
+    BoxLayout:
+        orientation: 'vertical'
+        # padding and spacing from global BoxLayout rule, or override here
+        # padding: '10dp'
+        # spacing: '10dp' # From previous KV
+        Button:
+            id: start_button
+            text: 'Start Scraping'
+            # size_hint_y, height from global Button rule
+            on_press: app.start_scraping_thread(self) # Pass the button instance
+        Label:
+            id: status_label
+            size_hint_y: None
+            height: '30dp' # Or use sp if text size dictates height
+            text: "" # Initial text
+        ScrollView:
+            id: log_display_scroll
+            TextInput:
+                id: log_display
+                readonly: True
+                multiline: True
+                size_hint_y: None
+                height: self.minimum_height
+                font_name: 'RobotoMono-Regular' # Monospaced for logs
+                # background_color from global TextInput
+                # foreground_color from global TextInput
+
+# HistoryScreen - Structure defined here
+<HistoryScreen>:
+    BoxLayout:
+        orientation: 'vertical'
+        # padding: '10dp'
+        # spacing: '10dp' # From previous KV
+        ScrollView:
+            id: metrics_scrollview # Added id for clarity
+            GridLayout:
+                id: metrics_layout 
+                cols: 2
+                size_hint_y: None
+                height: self.minimum_height
+                # Labels inside will get global <Label> style.
+                # Specific styling for these labels can be done by giving them a class.
+                # e.g. <MetricNameLabel@Label>: ... <MetricValueLabel@Label>: ...
+        Button:
+            id: refresh_button
+            text: 'Refresh Data'
+            # size_hint_y, height from global Button rule
+            on_press: root.load_and_display_metrics() # root refers to HistoryScreen instance
+
+# Root layout styling (ScraperApp's root BoxLayout)
+# If ScraperApp's root_layout in Python was `self.root_layout = BoxLayout(...)`,
+# we could do `<RootAppLayout@BoxLayout>:` if we assigned `self.root_layout.name = 'RootAppLayout'`
+# For now, the nav_bar and ScreenManager are added to a standard BoxLayout.
+# The Nav Bar itself (BoxLayout)
+# <NavBarLayout@BoxLayout>: # If self.nav_bar in Python gets this class
+#    size_hint_y: None
+#    height: '50dp' # Already set in Python, but KV can override if class is applied
+#    padding: '5dp' # Example custom padding for nav bar
+#    spacing: '5dp' # Example custom spacing
+# NavButtons inside it will get <NavButton> style.
