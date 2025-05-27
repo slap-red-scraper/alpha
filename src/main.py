@@ -10,6 +10,7 @@ from .models import Downline, Bonus, AuthData
 from .logger import Logger
 from .auth import AuthService # Added import for AuthService
 from .utils import progress, load_run_cache, save_run_cache # Added cache imports
+from .google_sheets_uploader import GoogleSheetsUploader # Added for Google Sheets
 
 class Scraper:
     """Handles scraping of downlines and bonuses."""
@@ -208,6 +209,14 @@ def main():
     REQUEST_TIMEOUT = 30
     unresponsive_sites_this_run = []
     logger = Logger(log_file=config.logging.log_file, log_level=config.logging.log_level, console=config.logging.console, detail=config.logging.detail)
+    
+    # Initialize GoogleSheetsUploader
+    gs_uploader = None
+    if config.google_sheets.enabled:
+        gs_uploader = GoogleSheetsUploader(config.google_sheets, logger)
+    else:
+        logger.emit("google_sheets_info", {"message": "Google Sheets uploading is disabled in config."})
+
     auth_service = AuthService(logger)
     scraper = Scraper(logger, REQUEST_TIMEOUT)
     urls = load_urls(config.settings.url_file)
@@ -360,6 +369,33 @@ def main():
             else:
                 logger.emit("historical_data_skipped", {"reason": "Daily bonus CSV not found or empty", "file": daily_bonus_csv_path})
 
+            # Upload Daily Bonus CSV to Google Sheets
+            if gs_uploader and config.google_sheets.upload_daily_bonus and os.path.exists(daily_bonus_csv_path) and os.path.getsize(daily_bonus_csv_path) > 0:
+                try:
+                    daily_bonus_df = pd.read_csv(daily_bonus_csv_path) # Read the CSV that was just saved
+                    if not daily_bonus_df.empty:
+                        sheet_name = f"DailyBonus_{datetime.now().strftime('%Y-%m-%d')}"
+                        logger.emit("google_sheets_upload_start", {"file": daily_bonus_csv_path, "sheet_name": sheet_name})
+                        gs_uploader.upload_dataframe(daily_bonus_df, sheet_name)
+                    else:
+                        logger.emit("google_sheets_upload_skipped", {"reason": "Daily bonus CSV is empty, skipping upload.", "file": daily_bonus_csv_path})
+                except Exception as e:
+                    logger.emit("google_sheets_upload_error", {"file": daily_bonus_csv_path, "error": f"Failed to prepare or upload daily bonus data: {str(e)}"})
+            elif gs_uploader and config.google_sheets.upload_daily_bonus: # Condition to log if upload was enabled but file was missing/empty
+                 logger.emit("google_sheets_upload_skipped", {"reason": "Daily bonus CSV not found or empty, skipping upload.", "file": daily_bonus_csv_path})
+
+            # Upload Historical Bonus (Latest Sheet) to Google Sheets
+            if gs_uploader and config.google_sheets.upload_historical_bonus and 'bonus_df_for_excel' in locals() and not bonus_df_for_excel.empty:
+                try:
+                    # Use today's date for the sheet name, similar to how it's done for Excel
+                    sheet_name = datetime.now().strftime('%m-%d') # This matches the Excel sheet name
+                    logger.emit("google_sheets_upload_start", {"source": "historical_bonus_df", "sheet_name": sheet_name})
+                    gs_uploader.upload_dataframe(bonus_df_for_excel, sheet_name) # bonus_df_for_excel is the DataFrame used for the Excel sheet
+                except Exception as e:
+                    logger.emit("google_sheets_upload_error", {"source": "historical_bonus_df", "sheet_name": sheet_name, "error": f"Failed to upload historical bonus data: {str(e)}"})
+            elif gs_uploader and config.google_sheets.upload_historical_bonus: # Condition to log if upload was enabled but df was missing/empty
+                 logger.emit("google_sheets_upload_skipped", {"reason": "Historical bonus dataframe (bonus_df_for_excel) not available or empty."})
+
         try:
             today_dt = datetime.now()
             yesterday_dt = today_dt - timedelta(days=1)
@@ -451,8 +487,21 @@ def main():
                     os.makedirs(os.path.dirname(comparison_report_path), exist_ok=True)
                     report_df.to_csv(comparison_report_path, index=False, encoding='utf-8')
                     logger.emit("comparison_report_generated", {"path": comparison_report_path, "rows": len(report_df)})
-                else: logger.emit("comparison_info", {"message": "No changes for comparison report."})
-            else: logger.emit("comparison_info", {"message": "Both today's and yesterday's bonus data are empty. No comparison report generated."})
+                    
+                    # Upload Comparison Report CSV to Google Sheets
+                    if gs_uploader and config.google_sheets.upload_comparison_report and 'report_df' in locals() and not report_df.empty:
+                        try:
+                            sheet_name = f"ComparisonReport_{datetime.now().strftime('%Y-%m-%d')}"
+                            logger.emit("google_sheets_upload_start", {"file": comparison_report_path, "sheet_name": sheet_name})
+                            gs_uploader.upload_dataframe(report_df, sheet_name)
+                        except Exception as e:
+                            logger.emit("google_sheets_upload_error", {"file": comparison_report_path, "error": f"Failed to upload comparison report: {str(e)}"})
+                    elif gs_uploader and config.google_sheets.upload_comparison_report: # Log if upload enabled but df missing/empty
+                        logger.emit("google_sheets_upload_skipped", {"reason": "Comparison report dataframe (report_df) not available or empty."})
+                else: 
+                    logger.emit("comparison_info", {"message": "No changes for comparison report."})
+            else: 
+                logger.emit("comparison_info", {"message": "Both today's and yesterday's bonus data are empty. No comparison report generated."})
         except Exception as e:
             import traceback
             logger.emit("comparison_module_error", {"error_type": type(e).__name__, "error": str(e), "traceback": traceback.format_exc()})

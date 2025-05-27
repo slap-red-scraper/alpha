@@ -23,6 +23,7 @@ The Slap Red Scraper Alpha is a Python-based tool designed to automate the colle
 *   **Configurable Operation**:
     *   Control script behavior via `config.ini`, including credentials, target URL file, downline data fetching (enable/disable), and logging verbosity.
 *   **Robust Error Handling**: Includes error detection for network issues, API errors, and data processing problems, with relevant information logged.
+*   **Google Sheets Integration (Optional)**: Automatically upload generated reports (daily bonus CSV, the latest sheet from historical bonuses Excel, and the daily comparison report CSV) to a specified Google Spreadsheet.
 
 ## Directory Structure
 
@@ -80,7 +81,52 @@ This project is structured as a Python package (the `src` directory). For correc
             *   `MORE`: Includes events like API requests/responses, successful fetches, and CSV writes.
             *   `MAX`: (Currently similar to `MORE`) Potentially for even more detailed future logging.
 
+    *   **`[google_sheets]` (Optional)**:
+        *   `enabled`: Set to `True` to enable uploading data to Google Sheets. Set to `False` to disable. Defaults to `False` if not specified.
+        *   `credentials_file`: Path to your Google Cloud service account JSON key file. This file is necessary for authentication with the Google Sheets API. Example: `path/to/your/google_credentials.json`.
+        *   `spreadsheet_id`: The ID of the Google Spreadsheet where data will be uploaded. You can find this ID in the URL of your spreadsheet (e.g., `https://docs.google.com/spreadsheets/d/SPREADSHEET_ID/edit`).
+        *   `upload_daily_bonus`: Set to `True` to upload the daily bonus report (e.g., `data/[mm-dd] bonuses.csv`) as a new sheet. Defaults to `True` if `enabled` is `True`. The sheet will be named `DailyBonus_YYYY-MM-DD`.
+        *   `upload_historical_bonus`: Set to `True` to upload the most recent day's data from `data/historical_bonuses.xlsx` (which is a copy of that day's daily bonus CSV) as a new sheet. Defaults to `True` if `enabled` is `True`. The sheet will be named `MM-DD` (matching the Excel sheet name).
+        *   `upload_comparison_report`: Set to `True` to upload the daily comparison report (e.g., `data/comparison_report_[mm-dd].csv`) as a new sheet. Defaults to `True` if `enabled` is `True`. The sheet will be named `ComparisonReport_YYYY-MM-DD`.
+
     Ensure `config.ini` is correctly filled out before running the scraper.
+
+## Setting up Google Sheets Integration
+
+If you want to use the Google Sheets integration feature, you'll need to set up Google API credentials:
+
+1.  **Create a Google Cloud Project:**
+    *   Go to the [Google Cloud Console](https://console.cloud.google.com/).
+    *   Create a new project or select an existing one.
+
+2.  **Enable APIs:**
+    *   In your Google Cloud Project, navigate to "APIs & Services" > "Library".
+    *   Search for and enable the **Google Sheets API**.
+    *   Search for and enable the **Google Drive API** (this is often required for managing spreadsheets, including creating new ones or accessing existing ones, depending on the operations performed by the `gspread` library).
+
+3.  **Create a Service Account:**
+    *   Navigate to "APIs & Services" > "Credentials".
+    *   Click "Create Credentials" and select "Service account".
+    *   Fill in the service account details (name, ID, description).
+    *   Grant appropriate roles. For writing to Google Sheets, "Editor" access to the specific sheet is managed via sharing, but you might consider roles like "Service Account User" or roles related to Drive/Sheets if broader API access is needed for the service account itself (though typically not required for just `gspread` operations on a shared sheet).
+    *   Click "Done".
+
+4.  **Download JSON Key:**
+    *   After creating the service account, find it in the "Credentials" list.
+    *   Click on the service account email.
+    *   Go to the "Keys" tab.
+    *   Click "Add Key" > "Create new key".
+    *   Select "JSON" as the key type and click "Create".
+    *   A JSON file will be downloaded. This is your `credentials_file`. Store it securely and update its path in `config.ini`.
+
+5.  **Share the Google Spreadsheet:**
+    *   Open the Google Spreadsheet you want the script to upload data to.
+    *   Click the "Share" button (usually in the top right corner).
+    *   In the "Add people and groups" field, enter the email address of the service account you created (e.g., `your-service-account-name@your-project-id.iam.gserviceaccount.com`).
+    *   Grant it "Editor" permissions.
+    *   Click "Send" or "Share".
+
+Once these steps are completed and `config.ini` is updated with the `spreadsheet_id` and the correct path to the `credentials_file`, the scraper will be able to upload data to your Google Sheet if `enabled = True` in the `[google_sheets]` section.
 
 ## Running the Scraper
 
