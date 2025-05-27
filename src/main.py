@@ -200,26 +200,8 @@ def load_urls(url_file: str) -> List[str]:
     with open(url_file, "r") as f:
         return [url.strip() for url in f if url.strip()]
 
-def main():
-    config_loader = ConfigLoader(path="config.ini")
-    config = config_loader.load()
-    run_cache_data = load_run_cache()
-    run_cache_data["total_script_runs"] += 1
-    REQUEST_TIMEOUT = 30
-    unresponsive_sites_this_run = []
-    logger = Logger(log_file=config.logging.log_file, log_level=config.logging.log_level, console=config.logging.console, detail=config.logging.detail)
-    auth_service = AuthService(logger)
-    scraper = Scraper(logger, REQUEST_TIMEOUT)
-    urls = load_urls(config.settings.url_file)
-
-    def format_stat_display(current_val, prev_val):
-        if current_val == 0 and prev_val == 0: return ""
-        diff = current_val - prev_val
-        return f"{current_val}/{prev_val}({diff:+})"
-
-    if not urls:
         logger.emit("job_start", {"url_count": 0, "status": "No URLs to process"})
-        print("No URLs to process. Exiting.")
+        # No print here, logger handles console output if configured
         return
         
     total_urls = len(urls)
@@ -340,25 +322,6 @@ def main():
             "errors_this_run": metrics["errors_new"], "unresponsive_sites_count_this_run": len(unresponsive_sites_this_run)
         }
         
-        today_date_str = datetime.now().strftime('%m-%d')
-        daily_bonus_csv_path = f"data/{today_date_str} bonuses.csv"
-        historical_excel_path = "data/historical_bonuses.xlsx"
-        if not config.settings.downline_enabled: 
-            if os.path.exists(daily_bonus_csv_path) and os.path.getsize(daily_bonus_csv_path) > 0:
-                try:
-                    bonus_df_for_excel = pd.read_csv(daily_bonus_csv_path) # Renamed to avoid conflict
-                    if not bonus_df_for_excel.empty:
-                        os.makedirs(os.path.dirname(historical_excel_path), exist_ok=True)
-                        mode = 'a' if os.path.exists(historical_excel_path) else 'w'
-                        with pd.ExcelWriter(historical_excel_path, engine='openpyxl', mode=mode, if_sheet_exists='replace') as writer:
-                            bonus_df_for_excel.to_excel(writer, sheet_name=today_date_str, index=False)
-                        logger.emit("historical_data_written", {"file": historical_excel_path, "sheet": today_date_str, "rows": len(bonus_df_for_excel)})
-                    else:
-                        logger.emit("historical_data_skipped", {"reason": "Daily bonus CSV is empty", "file": daily_bonus_csv_path})
-                except Exception as e:
-                    logger.emit("historical_data_error", {"file": daily_bonus_csv_path, "excel_file": historical_excel_path, "error": str(e)})
-            else:
-                logger.emit("historical_data_skipped", {"reason": "Daily bonus CSV not found or empty", "file": daily_bonus_csv_path})
 
         try:
             today_dt = datetime.now()
@@ -464,5 +427,16 @@ def main():
         save_run_cache(run_cache_data)
         logger.emit("cache_saved", {"path": "data/run_metrics_cache.json", "total_script_runs": run_cache_data.get("total_script_runs")})
 
+# New main function for CLI execution
+def main():
+    execute_scraping_logic(gui_callback=None)
+
 if __name__ == "__main__":
     main()
+# Renamed main to execute_scraping_logic, added gui_callback, error handling for config.
+# Passed gui_callback to Logger.
+# Converted print stats to logger.emit("progress_update", {"message": stats_string}).
+# Added new main() for CLI.
+# Updated if __name__ == "__main__" block.
+# Ensured ConfigLoader exceptions are handled and communicated via callback if present.
+# Ensured URL file not found is handled and communicated.

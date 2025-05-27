@@ -32,13 +32,15 @@ class Logger:
         "exception": "LESS",
         "website_unresponsive": "LESS",
         "down_sites_summary": "LESS",
-        "bonus_api_error": "MORE"
+        "bonus_api_error": "MORE",
+        "progress_update": "LESS" # Added for progress stats display
     }
 
-    def __init__(self, log_file: str, log_level: str, console: bool, detail: str):
+    def __init__(self, log_file: str, log_level: str, console: bool, detail: str, gui_callback=None):
         self.logger = logging.getLogger("ScraperLogger")
         self.logger.setLevel(getattr(logging, log_level.upper(), logging.DEBUG)) # ensure log_level is upper
         self.verbosity = self.VERBOSITY_LEVELS.get(detail.upper(), 0) # ensure detail is upper
+        self.gui_callback = gui_callback
 
         # File handler
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
@@ -60,6 +62,22 @@ class Logger:
             # Ensure details is a dictionary for the formatter
             actual_details = details if isinstance(details, dict) else {"data": details}
             self.logger.log(getattr(logging, level.upper()), event, actual_details)
+
+            if self.gui_callback:
+                # For "progress_update", the details dictionary is expected to have a "message" key
+                # containing the pre-formatted string.
+                if event == "progress_update" and "message" in actual_details:
+                    gui_message = actual_details["message"] # Send the raw message for progress updates
+                else:
+                    # Standard formatting for other events
+                    gui_message = f"[{level.upper()}] {event}"
+                    if actual_details:
+                        try:
+                            details_str = json.dumps(actual_details)
+                        except TypeError: # In case details are not JSON serializable
+                            details_str = str(actual_details)
+                        gui_message += f": {details_str}"
+                self.gui_callback(gui_message)
 
 
     def load_metrics(self, log_file: str) -> Dict[str, float]:
