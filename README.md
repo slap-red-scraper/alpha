@@ -43,6 +43,8 @@ The scraper will automatically create the following directories in the project r
 
 ## Setup & Configuration
 
+This project is structured as a Python package (the `src` directory). For correct operation, especially when running the script as a module (`python -m src.main`), ensure that an empty file named `src/__init__.py` exists. This file being present allows Python to recognize `src` as a package. (This file should already be included in the repository).
+
 1.  **Clone the Repository (if applicable):**
     If you have obtained the code as a Git repository, clone it to your local machine:
     ```bash
@@ -82,19 +84,29 @@ The scraper will automatically create the following directories in the project r
 
 ## Running the Scraper
 
-Once you have set up your Python environment, installed the dependencies, and configured `config.ini` (especially your credentials and the `urls.txt` file), you can run the scraper from the project's root directory using the following command:
+After setting up your Python environment, installing dependencies, and configuring `config.ini`, it's important to run the scraper in a way that Python correctly recognizes its package structure (due to internal relative imports like `from .models import ...`).
 
+**Recommended Method (from the project's root directory, e.g., `C:\py\`):**
+```bash
+python -m src.main
+```
+This command tells Python to run the `main.py` script as part of the `src` package, which ensures that relative imports within the `src` package work correctly.
+
+**Alternative Method (may cause `ImportError`):**
+You might also try running the script directly:
 ```bash
 python src/main.py
 ```
+However, this method can lead to an `ImportError: attempted relative import with no known parent package` if Python doesn't recognize `src` as a package from `main.py`'s perspective. This often happens if the `src` directory (or its parent) is not automatically added to Python's path in a way that resolves the package context for direct script execution.
 
-Upon execution, the scraper will:
-1.  Read its configuration.
-2.  Attempt to log in to each URL listed in your specified file.
-3.  Fetch data (bonuses or downlines, based on `config.ini`).
-4.  Display progress dynamically in the console.
-5.  Save output data to the `/data` directory.
-6.  Log operations to the `/logs` directory.
+**Upon execution (using the recommended method), the scraper will:**
+1.  Read its configuration from `config.ini`.
+2.  (The script relies on `src` being a package, typically ensured by an `src/__init__.py` file, for imports to function correctly.)
+3.  Attempt to log in to each URL listed in your specified URL file.
+4.  Fetch data (bonuses or downlines, based on `config.ini`).
+5.  Display progress dynamically in the console.
+6.  Save output data to the `/data` directory.
+7.  Log operations to the `/logs` directory.
 
 ## Understanding the Output
 
