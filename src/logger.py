@@ -12,7 +12,7 @@ class JsonFormatter(logging.Formatter):
             "module": record.module,
             "method": record.funcName,
             "event": record.msg,
-            "details": record.args[0] if record.args else {}
+            "details": record.details_data if hasattr(record, 'details_data') else {}
         }
         return json.dumps(log_record)
 
@@ -61,7 +61,7 @@ class Logger:
         if self.verbosity >= required_level:
             # Ensure details is a dictionary for the formatter
             actual_details = details if isinstance(details, dict) else {"data": details}
-            self.logger.log(getattr(logging, level.upper()), event, actual_details)
+            self.logger.log(getattr(logging, level.upper()), event, args=(), extra={'details_data': actual_details})
 
             if self.gui_callback:
                 # For "progress_update", the details dictionary is expected to have a "message" key
