@@ -1,2 +1,6 @@
 gspread
 google-auth
+kivy
+openpyxl
+pandas
+requests
