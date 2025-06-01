@@ -63,13 +63,13 @@ class GoogleSheetsUploader:
                 worksheet = spreadsheet.add_worksheet(title=sheet_name, rows="1", cols="1") # Create with minimal size
 
             worksheet.clear() # Clear existing content
-            
+
             # Convert NaN/NA to empty strings for gspread compatibility if necessary
             df_upload = df.fillna('').astype(str)
-            
+
             header = [str(col) for col in df_upload.columns.tolist()]
             data_to_upload = [header] + df_upload.values.tolist()
-            
+
             worksheet.update(data_to_upload, raw=False) # raw=False to parse values
             self.logger.emit("google_sheets_upload_success", {"sheet_name": sheet_name, "rows": len(df_upload)})
         except Exception as e:
@@ -80,7 +80,7 @@ class GoogleSheetsUploader:
             if not self.gs_config.enabled:
                 self.logger.emit("google_sheets_upload_skipped", {"reason": "Google Sheets uploading is disabled in config."})
             return
-        
+
         try:
             df = pd.read_csv(csv_file_path)
             self.upload_dataframe(df, sheet_name)

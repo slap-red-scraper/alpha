@@ -5,12 +5,58 @@ import time # Added time import
 import requests
 import pandas as pd # Added pandas import
 from datetime import datetime, timedelta # Added import
-from typing import List, Set, Tuple, Union # Union for return types
+from typing import List, Set, Tuple, Union, Dict, Any # Union for return types. Added Dict, Any for cache.
+import json # Added for cache functions
 from .models import Downline, Bonus, AuthData
 from .logger import Logger
 from .auth import AuthService # Added import for AuthService
-from .utils import progress, load_run_cache, save_run_cache # Added cache imports
+from .utils import progress # Removed load_run_cache, save_run_cache
 from .google_sheets_uploader import GoogleSheetsUploader # Added for Google Sheets
+
+_CACHE_FILE_PATH = "data/run_metrics_cache.json"
+
+def _load_run_cache() -> Dict[str, Any]:
+    """
+    Loads run metrics cache from a JSON file.
+    Returns default structure if file not found or JSON is invalid.
+    """
+    default_cache: Dict[str, Any] = {"total_script_runs": 0, "sites": {}}
+    if not os.path.exists(_CACHE_FILE_PATH):
+        print(f"Info: Cache file '{_CACHE_FILE_PATH}' not found. Returning default cache.")
+        return default_cache
+    try:
+        with open(_CACHE_FILE_PATH, 'r') as f:
+            data: Dict[str, Any] = json.load(f)
+            # Basic validation for expected top-level keys
+            if "total_script_runs" not in data or "sites" not in data:
+                print(f"Warning: Cache file '{_CACHE_FILE_PATH}' is missing expected keys. Returning default cache.")
+                return default_cache
+            return data
+    except FileNotFoundError: # Should be caught by os.path.exists, but good for robustness
+        print(f"Info: Cache file '{_CACHE_FILE_PATH}' not found (FileNotFoundError). Returning default cache.")
+        return default_cache
+    except json.JSONDecodeError:
+        print(f"Warning: Cache file '{_CACHE_FILE_PATH}' contains invalid JSON. Returning default cache.")
+        return default_cache
+    except Exception as e:
+        print(f"Warning: An unexpected error occurred while loading cache file '{_CACHE_FILE_PATH}': {e}. Returning default cache.")
+        return default_cache
+
+def _save_run_cache(data: Dict[str, Any]) -> None:
+    """
+    Saves run metrics cache to a JSON file.
+    Ensures the directory exists.
+    """
+    try:
+        os.makedirs(os.path.dirname(_CACHE_FILE_PATH), exist_ok=True)
+        with open(_CACHE_FILE_PATH, 'w') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        # In a real app, this might go to a logger if available
+        print(f"Error: Could not save cache file '{_CACHE_FILE_PATH}': {e}")
+
+def _generate_dated_sheet_name(base_title: str) -> str:
+    return f"{base_title}_{datetime.now().strftime('%Y-%m-%d')}"
 
 class Scraper:
     """Handles scraping of downlines and bonuses."""
@@ -204,12 +250,12 @@ def load_urls(url_file: str) -> List[str]:
 def main():
     config_loader = ConfigLoader(path="config.ini")
     config = config_loader.load()
-    run_cache_data = load_run_cache()
+    run_cache_data = _load_run_cache()
     run_cache_data["total_script_runs"] += 1
     REQUEST_TIMEOUT = 30
     unresponsive_sites_this_run = []
     logger = Logger(log_file=config.logging.log_file, log_level=config.logging.log_level, console=config.logging.console, detail=config.logging.detail)
-    
+
     # Initialize GoogleSheetsUploader
     gs_uploader = None
     if config.google_sheets.enabled:
@@ -374,7 +420,7 @@ def main():
                 try:
                     daily_bonus_df = pd.read_csv(daily_bonus_csv_path) # Read the CSV that was just saved
                     if not daily_bonus_df.empty:
-                        sheet_name = f"DailyBonus_{datetime.now().strftime('%Y-%m-%d')}"
+                        sheet_name = _generate_dated_sheet_name("DailyBonus")
                         logger.emit("google_sheets_upload_start", {"file": daily_bonus_csv_path, "sheet_name": sheet_name})
                         gs_uploader.upload_dataframe(daily_bonus_df, sheet_name)
                     else:
@@ -487,20 +533,20 @@ def main():
                     os.makedirs(os.path.dirname(comparison_report_path), exist_ok=True)
                     report_df.to_csv(comparison_report_path, index=False, encoding='utf-8')
                     logger.emit("comparison_report_generated", {"path": comparison_report_path, "rows": len(report_df)})
-                    
+
                     # Upload Comparison Report CSV to Google Sheets
                     if gs_uploader and config.google_sheets.upload_comparison_report and 'report_df' in locals() and not report_df.empty:
                         try:
-                            sheet_name = f"ComparisonReport_{datetime.now().strftime('%Y-%m-%d')}"
+                            sheet_name = _generate_dated_sheet_name("ComparisonReport")
                             logger.emit("google_sheets_upload_start", {"file": comparison_report_path, "sheet_name": sheet_name})
                             gs_uploader.upload_dataframe(report_df, sheet_name)
                         except Exception as e:
                             logger.emit("google_sheets_upload_error", {"file": comparison_report_path, "error": f"Failed to upload comparison report: {str(e)}"})
                     elif gs_uploader and config.google_sheets.upload_comparison_report: # Log if upload enabled but df missing/empty
                         logger.emit("google_sheets_upload_skipped", {"reason": "Comparison report dataframe (report_df) not available or empty."})
-                else: 
+                else:
                     logger.emit("comparison_info", {"message": "No changes for comparison report."})
-            else: 
+            else:
                 logger.emit("comparison_info", {"message": "Both today's and yesterday's bonus data are empty. No comparison report generated."})
         except Exception as e:
             import traceback
@@ -510,8 +556,8 @@ def main():
         if unresponsive_sites_this_run:
             logger.emit("down_sites_summary", {"sites": unresponsive_sites_this_run, "count": len(unresponsive_sites_this_run)})
     finally:
-        save_run_cache(run_cache_data)
-        logger.emit("cache_saved", {"path": "data/run_metrics_cache.json", "total_script_runs": run_cache_data.get("total_script_runs")})
+        _save_run_cache(run_cache_data)
+        logger.emit("cache_saved", {"path": _CACHE_FILE_PATH, "total_script_runs": run_cache_data.get("total_script_runs")})
 
 if __name__ == "__main__":
     main()
